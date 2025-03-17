@@ -206,11 +206,10 @@ class DatabaseETL:
             if values:  # Only process if we have valid values
                 avg_value = sum(values) / len(values)
                 cursor.execute("""
-                    INSERT INTO food_prices (series_id, region_id, item_code, period_id, price)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO food_prices (region_id, item_code, period_id, price)
+                    VALUES (%s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE price=%s
-                """, (f"DERIVED_{region_id}_{period_id}", region_id, item_code, 
-                      period_id, avg_value, avg_value))
+                """, (region_id, item_code, period_id, avg_value, avg_value))
         
         self.connection.commit()
 
@@ -284,13 +283,13 @@ class DatabaseETL:
                 base_period, base_value = max(base_periods.items(), key=lambda x: x[1])[0]
                 
                 cursor.execute("""
-                    INSERT INTO cpi_values (series_id, region_id, item_code, period_id, value,
+                    INSERT INTO cpi_values (region_id, item_code, period_id, value,
                                           base_period, base_value)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    VALUES (%s, %s, %s, %s, %s, %s)
                     ON DUPLICATE KEY UPDATE 
                         value=%s, base_period=%s, base_value=%s
-                """, (f"DERIVED_{region_id}_{period_id}", region_id, item_code, 
-                      period_id, avg_value, base_period, base_value,
+                """, (region_id, item_code, period_id, 
+                      avg_value, base_period, base_value,
                       avg_value, base_period, base_value))
                 
         self.connection.commit()

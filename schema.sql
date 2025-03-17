@@ -43,11 +43,11 @@ CREATE TABLE cpi_categories (
 
 -- Food Price Data
 CREATE TABLE food_prices (
-    series_id VARCHAR(50) PRIMARY KEY,
     region_id INT,
     item_code VARCHAR(20),
     period_id INT,
     price DECIMAL(10,2),
+    PRIMARY KEY (region_id, item_code, period_id),
     FOREIGN KEY (region_id) REFERENCES regions(region_id),
     FOREIGN KEY (item_code) REFERENCES food_categories(item_code),
     FOREIGN KEY (period_id) REFERENCES time_periods(period_id)
@@ -55,13 +55,13 @@ CREATE TABLE food_prices (
 
 -- CPI Data
 CREATE TABLE cpi_values (
-    series_id VARCHAR(50) PRIMARY KEY,
     region_id INT,
     item_code VARCHAR(20),
     period_id INT,
     value DECIMAL(10,2),
     base_period VARCHAR(50),
     base_value DECIMAL(10,2),
+    PRIMARY KEY (region_id, item_code, period_id),
     FOREIGN KEY (region_id) REFERENCES regions(region_id),
     FOREIGN KEY (item_code) REFERENCES cpi_categories(item_code),
     FOREIGN KEY (period_id) REFERENCES time_periods(period_id)
