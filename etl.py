@@ -38,13 +38,17 @@ class DatabaseETL:
 
     def _extract_states_from_area_name(self, area_name: str) -> list[str]:
         """Extract state codes from area name like 'City1-City2, ST1-ST2' or 'City, ST'"""
-        # Handle special cases first
-        if area_name in ['Urban Hawaii', 'Urban Alaska']:
-            return [area_name.split()[1]]
+        # Handle special cases - map Urban Alaska/Hawaii directly to state names
+        if area_name == 'Urban Alaska':
+            return ['Alaska']
+        if area_name == 'Urban Hawaii':
+            return ['Hawaii']
             
         # Find everything after the comma
         parts = area_name.split(',')
         if len(parts) < 2:  # No state codes found
+            # For special region names without state codes, return empty list
+            # These will be handled as regions rather than states
             return []
             
         # Get the state codes part and split on dash or space
@@ -73,26 +77,27 @@ class DatabaseETL:
     def _get_or_create_region(self, region_name: str, region_type: str) -> list[int]:
         """Get region IDs from cache or create new region entries. Returns list of region IDs."""
         # For city entries, extract and create state regions
-        if ',' in region_name and region_type != 'division':
+        if ',' in region_name or region_name in ['Urban Alaska', 'Urban Hawaii']:
             state_codes = self._extract_states_from_area_name(region_name)
-            region_ids = []
-            for state_code in state_codes:
-                state_name = self._normalize_state_name(state_code)
-                if state_name in self.region_map:
-                    region_ids.append(self.region_map[state_name])
-                    continue
-                    
-                cursor = self.connection.cursor()
-                cursor.execute(
-                    "INSERT INTO regions (region_name, region_type) VALUES (%s, 'state') ON DUPLICATE KEY UPDATE region_id=LAST_INSERT_ID(region_id)",
-                    (state_name,)
-                )
-                region_id = cursor.lastrowid
-                self.region_map[state_name] = region_id
-                region_ids.append(region_id)
-            return region_ids
+            if state_codes:  # Only process if we found valid state codes
+                region_ids = []
+                for state_code in state_codes:
+                    state_name = self._normalize_state_name(state_code)
+                    if state_name in self.region_map:
+                        region_ids.append(self.region_map[state_name])
+                        continue
+                        
+                    cursor = self.connection.cursor()
+                    cursor.execute(
+                        "INSERT INTO regions (region_name, region_type) VALUES (%s, 'state') ON DUPLICATE KEY UPDATE region_id=LAST_INSERT_ID(region_id)",
+                        (state_name,)
+                    )
+                    region_id = cursor.lastrowid
+                    self.region_map[state_name] = region_id
+                    region_ids.append(region_id)
+                return region_ids
                 
-        # For non-city entries, behave as before
+        # For non-city entries or when no state codes found, create/get as a region
         if region_name in self.region_map:
             return [self.region_map[region_name]]
             
