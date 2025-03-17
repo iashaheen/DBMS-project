@@ -365,7 +365,6 @@ class DatabaseETL:
         
         # Process each state
         for _, row in current_df.iterrows():
-            # State names here are already in the desired format
             state = row['State']
             region_ids = self._get_or_create_region(state, 'state')
             region_id = region_ids[0]
@@ -373,22 +372,34 @@ class DatabaseETL:
             
             # Process each year's data
             for year in range(1984, 2024):
-                year_col = f"{year}_Median_income"
-                error_col = f"{year}_Standard_error"
+                # Handle different column name formats
+                year_current = f"{year}_Median_income"  # Format in current dollars file
+                year_adj = f"{year} Median income"      # Format in 2023 dollars file
+                error_current = f"{year}_Standard_error"
+                error_adj = f"{year} Standard error"
                 
-                # Skip if the column doesn't exist or has no data
-                if year_col not in row.index or year_col not in adjusted_row.index:
+                # Skip if the columns don't exist
+                if year_current not in row.index or year_adj not in adjusted_row.index:
+                    # logger.debug(f"Skipping {state} {year}: column not found")
                     continue
                     
-                if pd.isna(row[year_col]) or pd.isna(adjusted_row[year_col]):
+                if pd.isna(row[year_current]) or pd.isna(adjusted_row[year_adj]):
+                    # logger.debug(f"Skipping {state} {year}: NaN value")
                     continue
                     
-                # Clean numeric values
+                # Clean numeric values by removing quotes and commas
                 try:
-                    median_current = float(str(row[year_col]).replace(',', '').replace('"', ''))
-                    median_2023 = float(str(adjusted_row[year_col]).replace(',', '').replace('"', ''))
-                    error_current = float(str(row[error_col]).replace(',', '').replace('"', ''))
-                    error_2023 = float(str(adjusted_row[error_col]).replace(',', '').replace('"', ''))
+                    current_val = str(row[year_current]).replace(',', '').replace('"', '')
+                    adj_val = str(adjusted_row[year_adj]).replace(',', '').replace('"', '')
+                    current_err = str(row[error_current]).replace(',', '').replace('"', '')
+                    adj_err = str(adjusted_row[error_adj]).replace(',', '').replace('"', '')
+                    
+                    # logger.debug(f"Processing {state} {year}: {current_val}, {adj_val}")
+                    
+                    median_current = float(current_val)
+                    median_2023 = float(adj_val)
+                    error_current = float(current_err)
+                    error_2023 = float(adj_err)
                     
                     period_id = self._get_or_create_period(year)
                     
@@ -405,6 +416,9 @@ class DatabaseETL:
                           error_current, error_2023,
                           median_current, median_2023,
                           error_current, error_2023))
+
+                    # logger.debug(f"Inserted data for {state} {year}")
+                    
                 except (ValueError, TypeError) as e:
                     logger.warning(f"Skipping invalid data for {state} in {year}: {e}")
                     continue
