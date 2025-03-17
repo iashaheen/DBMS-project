@@ -28,12 +28,20 @@ The database schema has been designed following 3rd Normal Form (3NF) principles
 
 ## Setup Instructions
 
-1. Create MySQL Database:
-```sql
-CREATE DATABASE economic_data;
+
+1. Create database schema:
+```bash
+mysql -u root -p economic_data < schema.sql
 ```
 
-2. Set up environment variables:
+2. Create MySQL User (in mysql cli):
+```sql
+CREATE USER 'econ_user'@'localhost' IDENTIFIED BY 'econ_pass';
+GRANT ALL PRIVILEGES ON economic_data.* TO 'econ_user'@'localhost';
+FLUSH PRIVILEGES;
+```
+
+3. Set up environment variables if needed:
 ```bash
 export DB_HOST=localhost
 export DB_USER=your_username
@@ -41,14 +49,9 @@ export DB_PASSWORD=your_password
 export DB_NAME=economic_data
 ```
 
-3. Install Python dependencies:
+4. Install Python dependencies:
 ```bash
 pip install pandas mysql-connector-python
-```
-
-4. Create database schema:
-```bash
-mysql -u $DB_USER -p$DB_PASSWORD $DB_NAME < schema.sql
 ```
 
 5. Run ETL process:

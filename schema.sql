@@ -1,8 +1,19 @@
 -- Unified Economic Data Analysis Schema
-DROP SCHEMA IF EXISTS economic_data;
-CREATE SCHEMA economic_data;
+CREATE DATABASE IF NOT EXISTS economic_data;
+USE economic_data;
 
 -- Reference Tables for Location/Area Management
+DROP TABLE IF EXISTS state_income;
+DROP TABLE IF EXISTS regional_income;
+DROP TABLE IF EXISTS state_food_sales;
+DROP TABLE IF EXISTS cpi_values;
+DROP TABLE IF EXISTS food_prices;
+DROP TABLE IF EXISTS cpi_categories;
+DROP TABLE IF EXISTS food_categories;
+DROP TABLE IF EXISTS time_periods;
+DROP TABLE IF EXISTS regions;
+
+-- Now create tables
 CREATE TABLE regions (
     region_id INT AUTO_INCREMENT PRIMARY KEY,
     region_name VARCHAR(100) NOT NULL UNIQUE,

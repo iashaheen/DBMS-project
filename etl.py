@@ -121,6 +121,16 @@ class DatabaseETL:
         self.period_map[period_key] = period_id
         return period_id
 
+    def _parse_period(self, period_str: str) -> int:
+        """Convert period string to month number"""
+        if period_str.startswith('M'):
+            return int(period_str.replace('M', ''))
+        elif period_str.startswith('S'):
+            # Convert semester to middle month (S01 -> 6, S02 -> 12)
+            return int(period_str.replace('S', '')) * 6
+        else:
+            raise ValueError(f"Unknown period format: {period_str}")
+
     def load_food_categories(self):
         """Load food categories from CSV"""
         df = pd.read_csv('data/food_prices_items.csv')
@@ -128,7 +138,7 @@ class DatabaseETL:
         for _, row in df.iterrows():
             cursor.execute(
                 "INSERT INTO food_categories (item_code, item_name) VALUES (%s, %s) ON DUPLICATE KEY UPDATE item_name=%s",
-                (row['Item_code'], row['Item_name'], row['Item_name'])
+                (row['item_code'], row['item_name'], row['item_name'])
             )
         self.connection.commit()
 
@@ -139,140 +149,150 @@ class DatabaseETL:
         for _, row in df.iterrows():
             cursor.execute(
                 "INSERT INTO cpi_categories (item_code, item_name) VALUES (%s, %s) ON DUPLICATE KEY UPDATE item_name=%s",
-                (row['Item_code'], row['Item_name'], row['Item_name'])
+                (row['item_code'], row['item_name'], row['item_name'])
             )
         self.connection.commit()
 
     def load_food_prices(self):
         """Load food prices data with both monthly and yearly aggregates"""
-        series_df = pd.read_csv('data/food_prices_series.csv')
+        # Read CSVs and clean column names
+        series_df = pd.read_csv('data/food_prices_series.csv', low_memory=False)
+        series_df.columns = series_df.columns.str.strip()
+        # Convert value column to float
+        series_df['value'] = pd.to_numeric(series_df['value'], errors='coerce')
+        
         metadata_df = pd.read_csv('data/food_prices_metadata.csv')
+        metadata_df.columns = metadata_df.columns.str.strip()
+        
         areas_df = pd.read_csv('data/food_prices_area.csv')
+        areas_df.columns = areas_df.columns.str.strip()
         
         cursor = self.connection.cursor()
-        
-        # Group series by Series_id, Year for yearly aggregation
-        yearly_aggs = series_df.groupby(['Series_id', 'Year'])['Value'].mean().reset_index()
         
         # Create a mapping to track values per state for averaging
         state_values = {}  # (state, period_id, item_code) -> [values]
         
         # Process each series
         for _, series in series_df.iterrows():
-            metadata = metadata_df[metadata_df['Series_id'] == series['Series_id']].iloc[0]
-            area = areas_df[areas_df['Area_code'] == metadata['Area_code']].iloc[0]
+            if pd.isna(series['value']):  # Skip rows with invalid values
+                continue
+                
+            metadata = metadata_df[metadata_df['series_id'] == series['series_id']].iloc[0]
+            area = areas_df[areas_df['area_code'] == metadata['area_code']].iloc[0]
             
             # Get all region IDs (could be multiple for cities spanning states)
-            region_ids = self._get_or_create_region(area['Area_name'], 'region')
+            region_ids = self._get_or_create_region(area['area_name'], 'region')
             
             # Create period IDs
             monthly_period_id = self._get_or_create_period(
-                series['Year'], 
-                int(series['Period'].replace('M', '')))
-            yearly_period_id = self._get_or_create_period(series['Year'])
-            
-            # Get yearly aggregate
-            yearly_agg = yearly_aggs[
-                (yearly_aggs['Series_id'] == series['Series_id']) & 
-                (yearly_aggs['Year'] == series['Year'])
-            ].iloc[0]
+                int(series['year']), 
+                int(series['period'].replace('M', '')))
+            yearly_period_id = self._get_or_create_period(int(series['year']))
             
             # For each region (state), store values for later averaging
             for region_id in region_ids:
-                key = (region_id, monthly_period_id, metadata['Item_code'])
+                key = (region_id, monthly_period_id, metadata['item_code'])
                 if key not in state_values:
                     state_values[key] = []
-                state_values[key].append(series['Value'])
+                state_values[key].append(float(series['value']))
                 
-                key = (region_id, yearly_period_id, metadata['Item_code'])
+                key = (region_id, yearly_period_id, metadata['item_code'])
                 if key not in state_values:
                     state_values[key] = []
-                state_values[key].append(yearly_agg['Value'])
+                state_values[key].append(float(series['value']))  # Use the same value for yearly
         
         # Insert averaged values
         for (region_id, period_id, item_code), values in state_values.items():
-            avg_value = sum(values) / len(values)
-            cursor.execute("""
-                INSERT INTO food_prices (series_id, region_id, item_code, period_id, price)
-                VALUES (%s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE price=%s
-            """, (f"DERIVED_{region_id}_{period_id}", region_id, item_code, 
-                  period_id, avg_value, avg_value))
-            
+            if values:  # Only process if we have valid values
+                avg_value = sum(values) / len(values)
+                cursor.execute("""
+                    INSERT INTO food_prices (series_id, region_id, item_code, period_id, price)
+                    VALUES (%s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE price=%s
+                """, (f"DERIVED_{region_id}_{period_id}", region_id, item_code, 
+                      period_id, avg_value, avg_value))
+        
         self.connection.commit()
 
     def load_cpi_data(self):
         """Load CPI data with both monthly and yearly aggregates"""
+        # Read CSVs and clean column names
         series_df = pd.read_csv('data/cpi_series.csv')
+        series_df.columns = series_df.columns.str.strip()
+        # Convert value column to float
+        series_df['value'] = pd.to_numeric(series_df['value'], errors='coerce')
+        
         metadata_df = pd.read_csv('data/cpi_metadata.csv')
+        metadata_df.columns = metadata_df.columns.str.strip()
+        
         areas_df = pd.read_csv('data/cpi_area.csv')
+        areas_df.columns = areas_df.columns.str.strip()
         
         cursor = self.connection.cursor()
-        
-        # Group series by Series_id, Year for yearly aggregation
-        yearly_aggs = series_df.groupby(['Series_id', 'Year'])['Value'].mean().reset_index()
         
         # Create a mapping to track values per state for averaging
         state_values = {}  # (state, period_id, item_code) -> [(value, base_period, base_value)]
         
         # Process each series
         for _, series in series_df.iterrows():
-            metadata = metadata_df[metadata_df['Series_id'] == series['Series_id']].iloc[0]
-            area = areas_df[areas_df['Area_code'] == metadata['Area_code']].iloc[0]
+            if pd.isna(series['value']):  # Skip rows with invalid values
+                continue
+                
+            metadata = metadata_df[metadata_df['series_id'] == series['series_id']].iloc[0]
+            area = areas_df[areas_df['area_code'] == metadata['area_code']].iloc[0]
             
             # Split base_period into period and value
-            base_period_parts = metadata['Base_period'].split('=')
+            base_period_parts = metadata['base_period'].split('=')
             base_period = base_period_parts[0].strip()
             base_value = float(base_period_parts[1].strip())
             
             # Get all region IDs (could be multiple for cities spanning states)
-            region_ids = self._get_or_create_region(area['Area_name'], 'region')
+            region_ids = self._get_or_create_region(area['area_name'], 'region')
             
-            # Create period IDs
-            monthly_period_id = self._get_or_create_period(
-                series['Year'], 
-                int(series['Period'].replace('M', '')))
-            yearly_period_id = self._get_or_create_period(series['Year'])
-            
-            # Get yearly aggregate
-            yearly_agg = yearly_aggs[
-                (yearly_aggs['Series_id'] == series['Series_id']) & 
-                (yearly_aggs['Year'] == series['Year'])
-            ].iloc[0]
-            
-            # For each region (state), store values for later averaging
-            for region_id in region_ids:
-                key = (region_id, monthly_period_id, metadata['Item_code'])
-                if key not in state_values:
-                    state_values[key] = []
-                state_values[key].append((series['Value'], base_period, base_value))
+            try:
+                # Create period IDs
+                month = self._parse_period(series['period'])
+                monthly_period_id = self._get_or_create_period(
+                    int(series['year']), month)
+                yearly_period_id = self._get_or_create_period(int(series['year']))
                 
-                key = (region_id, yearly_period_id, metadata['Item_code'])
-                if key not in state_values:
-                    state_values[key] = []
-                state_values[key].append((yearly_agg['Value'], base_period, base_value))
+                # For each region (state), store values for later averaging
+                for region_id in region_ids:
+                    key = (region_id, monthly_period_id, metadata['item_code'])
+                    if key not in state_values:
+                        state_values[key] = []
+                    state_values[key].append((float(series['value']), base_period, base_value))
+                    
+                    key = (region_id, yearly_period_id, metadata['item_code'])
+                    if key not in state_values:
+                        state_values[key] = []
+                    state_values[key].append((float(series['value']), base_period, base_value))
+            except ValueError as e:
+                logger.warning(f"Skipping invalid period format: {e}")
+                continue
         
         # Insert averaged values
         for (region_id, period_id, item_code), value_tuples in state_values.items():
-            avg_value = sum(v[0] for v in value_tuples) / len(value_tuples)
-            # Use the most common base period and value
-            base_periods = {}
-            for _, bp, bv in value_tuples:
-                if (bp, bv) not in base_periods:
-                    base_periods[(bp, bv)] = 0
-                base_periods[(bp, bv)] += 1
-            base_period, base_value = max(base_periods.items(), key=lambda x: x[1])[0]
-            
-            cursor.execute("""
-                INSERT INTO cpi_values (series_id, region_id, item_code, period_id, value,
-                                      base_period, base_value)
-                VALUES (%s, %s, %s, %s, %s, %s, %s)
-                ON DUPLICATE KEY UPDATE 
-                    value=%s, base_period=%s, base_value=%s
-            """, (f"DERIVED_{region_id}_{period_id}", region_id, item_code, 
-                  period_id, avg_value, base_period, base_value,
-                  avg_value, base_period, base_value))
-            
+            if value_tuples:  # Only process if we have valid values
+                avg_value = sum(v[0] for v in value_tuples) / len(value_tuples)
+                # Use the most common base period and value
+                base_periods = {}
+                for _, bp, bv in value_tuples:
+                    if (bp, bv) not in base_periods:
+                        base_periods[(bp, bv)] = 0
+                    base_periods[(bp, bv)] += 1
+                base_period, base_value = max(base_periods.items(), key=lambda x: x[1])[0]
+                
+                cursor.execute("""
+                    INSERT INTO cpi_values (series_id, region_id, item_code, period_id, value,
+                                          base_period, base_value)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
+                    ON DUPLICATE KEY UPDATE 
+                        value=%s, base_period=%s, base_value=%s
+                """, (f"DERIVED_{region_id}_{period_id}", region_id, item_code, 
+                      period_id, avg_value, base_period, base_value,
+                      avg_value, base_period, base_value))
+                
         self.connection.commit()
 
     def load_state_food_sales(self):
@@ -282,14 +302,18 @@ class DatabaseETL:
         
         for _, row in df.iterrows():
             # State names here are already in the desired format
-            region_id = self._get_or_create_region(row['State'], 'state')
+            region_ids = self._get_or_create_region(row['State'], 'state')
+            region_id = region_ids[0]  # Take first region ID since states map to single regions
             period_id = self._get_or_create_period(row['Year'])
+            
+            # Convert sales value to proper decimal format
+            sales_value = float(str(row['Total_sales_million']).replace(',', ''))
             
             cursor.execute("""
                 INSERT INTO state_food_sales (region_id, period_id, total_sales_million)
                 VALUES (%s, %s, %s)
                 ON DUPLICATE KEY UPDATE total_sales_million=%s
-            """, (region_id, period_id, row['Total_sales_million'], row['Total_sales_million']))
+            """, (region_id, period_id, sales_value, sales_value))
             
         self.connection.commit()
 
@@ -299,8 +323,19 @@ class DatabaseETL:
         cursor = self.connection.cursor()
         
         for _, row in df.iterrows():
-            region_id = self._get_or_create_region(row['Region'], 'region')
-            period_id = self._get_or_create_period(row['Year'])
+            region_ids = self._get_or_create_region(row['Region'], 'region')
+            region_id = region_ids[0]  # Take first region ID
+            
+            # Extract just the year number before the parentheses
+            year = int(str(row['Year']).split()[0])
+            period_id = self._get_or_create_period(year)
+            
+            # Clean number formatting
+            households = float(str(row['Number_thousands']).replace(',', ''))
+            median_current = float(str(row['Median_income_Current_dollars']).replace(',', ''))
+            median_2023 = float(str(row['Median_income_2023_dollars']).replace(',', ''))
+            mean_current = float(str(row['Mean_income_Current_dollars']).replace(',', ''))
+            mean_2023 = float(str(row['Mean_income_2023_dollars']).replace(',', ''))
             
             cursor.execute("""
                 INSERT INTO regional_income 
@@ -310,12 +345,11 @@ class DatabaseETL:
                 ON DUPLICATE KEY UPDATE 
                 households_thousands=%s, median_income_current=%s, 
                 median_income_2023=%s, mean_income_current=%s, mean_income_2023=%s
-            """, (region_id, period_id, row['Number_thousands'], 
-                  row['Median_income_Current_dollars'], row['Median_income_2023_dollars'],
-                  row['Mean_income_Current_dollars'], row['Mean_income_2023_dollars'],
-                  row['Number_thousands'], row['Median_income_Current_dollars'],
-                  row['Median_income_2023_dollars'], row['Mean_income_Current_dollars'],
-                  row['Mean_income_2023_dollars']))
+            """, (region_id, period_id, households, 
+                  median_current, median_2023,
+                  mean_current, mean_2023,
+                  households, median_current,
+                  median_2023, mean_current, mean_2023))
             
         self.connection.commit()
 
@@ -329,12 +363,29 @@ class DatabaseETL:
         for _, row in current_df.iterrows():
             # State names here are already in the desired format
             state = row['State']
-            region_id = self._get_or_create_region(state, 'state')
+            region_ids = self._get_or_create_region(state, 'state')
+            region_id = region_ids[0]
             adjusted_row = adjusted_df[adjusted_df['State'] == state].iloc[0]
             
             # Process each year's data
             for year in range(1984, 2024):
-                if f"{year}_Median_income" in row:
+                year_col = f"{year}_Median_income"
+                error_col = f"{year}_Standard_error"
+                
+                # Skip if the column doesn't exist or has no data
+                if year_col not in row.index or year_col not in adjusted_row.index:
+                    continue
+                    
+                if pd.isna(row[year_col]) or pd.isna(adjusted_row[year_col]):
+                    continue
+                    
+                # Clean numeric values
+                try:
+                    median_current = float(str(row[year_col]).replace(',', '').replace('"', ''))
+                    median_2023 = float(str(adjusted_row[year_col]).replace(',', '').replace('"', ''))
+                    error_current = float(str(row[error_col]).replace(',', '').replace('"', ''))
+                    error_2023 = float(str(adjusted_row[error_col]).replace(',', '').replace('"', ''))
+                    
                     period_id = self._get_or_create_period(year)
                     
                     cursor.execute("""
@@ -346,29 +397,40 @@ class DatabaseETL:
                         median_income_current=%s, median_income_2023=%s,
                         standard_error_current=%s, standard_error_2023=%s
                     """, (region_id, period_id, 
-                          row[f"{year}_Median_income"], adjusted_row[f"{year}_Median_income"],
-                          row[f"{year}_Standard_error"], adjusted_row[f"{year}_Standard_error"],
-                          row[f"{year}_Median_income"], adjusted_row[f"{year}_Median_income"],
-                          row[f"{year}_Standard_error"], adjusted_row[f"{year}_Standard_error"]))
+                          median_current, median_2023,
+                          error_current, error_2023,
+                          median_current, median_2023,
+                          error_current, error_2023))
+                except (ValueError, TypeError) as e:
+                    logger.warning(f"Skipping invalid data for {state} in {year}: {e}")
+                    continue
                     
         self.connection.commit()
 
     def execute_etl(self):
         """Execute the full ETL process"""
         try:
+            logger.info("Connecting to the Database...")
             self.connect()
             logger.info("Starting ETL process...")
             
             # Load reference data first
             self.load_food_categories()
+            logger.info("Loaded food categories")
             self.load_cpi_categories()
+            logger.info("Loaded CPI categories")
             
             # Load main data
             self.load_food_prices()
+            logger.info("Loaded food prices")
             self.load_cpi_data()
+            logger.info("Loaded CPI data")
             self.load_state_food_sales()
+            logger.info("Loaded state food sales")
             self.load_regional_income()
+            logger.info("Loaded regional income")
             self.load_state_income()
+            logger.info("Loaded state income")
             
             logger.info("ETL process completed successfully")
             
@@ -382,8 +444,8 @@ if __name__ == "__main__":
     # Load database configuration from environment variables
     db_config = {
         'host': os.getenv('DB_HOST', 'localhost'),
-        'user': os.getenv('DB_USER', 'root'),
-        'password': os.getenv('DB_PASSWORD', ''),
+        'user': os.getenv('DB_USER', 'econ_user'),
+        'password': os.getenv('DB_PASSWORD', 'econ_pass'),
         'database': os.getenv('DB_NAME', 'economic_data')
     }
     
