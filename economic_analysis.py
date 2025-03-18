@@ -358,6 +358,80 @@ def analyze_seasonal_patterns():
     """
     return execute_query(query)
 
+def analyze_price_vs_cpi(food_item: str, cpi_category: str):
+    """
+    Compares specific food item price trends with a CPI category over time
+    """
+    query = """
+    WITH food_price_data AS (
+        SELECT 
+            tp.year,
+            tp.month,
+            AVG(fp.price) as avg_price
+        FROM food_prices fp
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        WHERE fc.item_name = %s
+        GROUP BY tp.year, tp.month
+    ),
+    cpi_data AS (
+        SELECT 
+            tp.year,
+            tp.month,
+            AVG(cv.value) as cpi_value
+        FROM cpi_values cv
+        JOIN cpi_categories cc ON cv.item_code = cc.item_code
+        JOIN time_periods tp ON cv.period_id = tp.period_id
+        WHERE cc.item_name = %s
+        GROUP BY tp.year, tp.month
+    )
+    SELECT 
+        f.year,
+        f.month,
+        f.avg_price,
+        c.cpi_value
+    FROM food_price_data f
+    JOIN cpi_data c ON f.year = c.year AND f.month = c.month
+    ORDER BY f.year, f.month;
+    """
+    return execute_query(query, (food_item, cpi_category))
+
+def analyze_avg_food_price_vs_cpi(cpi_category: str):
+    """
+    Compares average food prices across all items with a CPI category over time
+    """
+    query = """
+    WITH avg_food_price_data AS (
+        SELECT 
+            tp.year,
+            tp.month,
+            AVG(fp.price) as avg_price
+        FROM food_prices fp
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        GROUP BY tp.year, tp.month
+    ),
+    cpi_data AS (
+        SELECT 
+            tp.year,
+            tp.month,
+            AVG(cv.value) as cpi_value
+        FROM cpi_values cv
+        JOIN cpi_categories cc ON cv.item_code = cc.item_code
+        JOIN time_periods tp ON cv.period_id = tp.period_id
+        WHERE cc.item_name = %s
+        GROUP BY tp.year, tp.month
+    )
+    SELECT 
+        f.year,
+        f.month,
+        f.avg_price,
+        c.cpi_value
+    FROM avg_food_price_data f
+    JOIN cpi_data c ON f.year = c.year AND f.month = c.month
+    ORDER BY f.year, f.month;
+    """
+    return execute_query(query, (cpi_category,))
+
 # Example usage of visualization for some queries
 def plot_income_inequality(df: pd.DataFrame):
     plt.figure(figsize=(12, 6))

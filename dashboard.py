@@ -17,7 +17,9 @@ from economic_analysis import (
     analyze_yoy_cpi_change,
     get_state_income_percentile,
     analyze_seasonal_patterns,
-    execute_query
+    execute_query,
+    analyze_price_vs_cpi,
+    analyze_avg_food_price_vs_cpi
 )
 
 # Add state name to code mapping
@@ -56,7 +58,8 @@ analysis_type = st.sidebar.selectbox(
         "Income Growth Analysis",
         "State Income Comparison",
         "Food Price Volatility",
-        "Seasonal Patterns"
+        "Seasonal Patterns",
+        "Price vs CPI Comparison"  # Added new option
     ]
 )
 
@@ -301,6 +304,99 @@ elif analysis_type == "Seasonal Patterns":
                               'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
                      tickvals=list(range(1, 13)))
     st.plotly_chart(fig, use_container_width=True)
+
+elif analysis_type == "Price vs CPI Comparison":
+    st.header("Price vs CPI Comparison Analysis")
+    
+    # Get inputs
+    col1, col2 = st.columns(2)
+    with col1:
+        food_items = get_food_items()
+        selected_food = st.selectbox("Select Food Item", food_items)
+    
+    with col2:
+        cpi_categories_df = get_cpi_categories()
+        selected_cpi = st.selectbox("Select CPI Category", cpi_categories_df['item_name'].tolist())
+    
+    # Get data for specific food item vs CPI
+    df_specific = analyze_price_vs_cpi(selected_food, selected_cpi)
+    df_specific['date'] = pd.to_datetime(df_specific['year'].astype(str) + '-' + df_specific['month'].astype(str) + '-01')
+    
+    # Create first plot
+    fig1 = go.Figure()
+    
+    # Add food price line
+    fig1.add_trace(go.Scatter(
+        x=df_specific['date'],
+        y=df_specific['avg_price'],
+        name=f'{selected_food} Price',
+        line=dict(color='blue')
+    ))
+    
+    # Add CPI line on secondary y-axis
+    fig1.add_trace(go.Scatter(
+        x=df_specific['date'],
+        y=df_specific['cpi_value'],
+        name=f'{selected_cpi} CPI',
+        yaxis='y2',
+        line=dict(color='red')
+    ))
+    
+    fig1.update_layout(
+        title=f'{selected_food} Price vs {selected_cpi} CPI',
+        yaxis=dict(title='Price ($)', side='left', showgrid=False),
+        yaxis2=dict(title='CPI Value', side='right', overlaying='y', showgrid=False),
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    st.plotly_chart(fig1, use_container_width=True)
+    
+    # Get data for average food prices vs CPI
+    df_avg = analyze_avg_food_price_vs_cpi(selected_cpi)  # Now using the selected CPI instead of hardcoded value
+    df_avg['date'] = pd.to_datetime(df_avg['year'].astype(str) + '-' + df_avg['month'].astype(str) + '-01')
+    
+    # Create second plot
+    fig2 = go.Figure()
+    
+    # Add average food price line
+    fig2.add_trace(go.Scatter(
+        x=df_avg['date'],
+        y=df_avg['avg_price'],
+        name='Average Food Price',
+        line=dict(color='green')
+    ))
+    
+    # Add CPI line on secondary y-axis
+    fig2.add_trace(go.Scatter(
+        x=df_avg['date'],
+        y=df_avg['cpi_value'],
+        name=f'{selected_cpi} CPI',  # Updated to use selected CPI name
+        yaxis='y2',
+        line=dict(color='red')
+    ))
+    
+    fig2.update_layout(
+        title=f'Average Food Price vs {selected_cpi} CPI',  # Updated title to reflect selected CPI
+        yaxis=dict(title='Price ($)', side='left', showgrid=False),
+        yaxis2=dict(title='CPI Value', side='right', overlaying='y', showgrid=False),
+        hovermode='x unified',
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    st.plotly_chart(fig2, use_container_width=True)
 
 # Add a footer with data source information
 st.sidebar.markdown("---")
