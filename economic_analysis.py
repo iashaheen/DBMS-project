@@ -9,8 +9,8 @@ def connect_to_db():
     """Establish database connection"""
     return mysql.connector.connect(
         host="localhost",
-        user="root",  # Update with your MySQL username
-        password="",   # Update with your MySQL password
+        user="econ_user",  # Update with your MySQL username
+        password="econ_pass",   # Update with your MySQL password
         database="economic_data"
     )
 
@@ -60,7 +60,8 @@ def analyze_food_price_trends(item_name: str):
     JOIN regions r ON fp.region_id = r.region_id
     JOIN time_periods tp ON fp.period_id = tp.period_id
     JOIN food_categories fc ON fp.item_code = fc.item_code
-    WHERE fc.item_name LIKE %s
+    WHERE fc.item_name LIKE %s AND
+    tp.period_type = 'monthly'
     ORDER BY tp.year, tp.month;
     """
     return execute_query(query, (f"%{item_name}%",))
