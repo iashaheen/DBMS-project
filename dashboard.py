@@ -15,11 +15,25 @@ from economic_analysis import (
     analyze_monthly_prices,
     analyze_regional_income_distribution,
     analyze_yoy_cpi_change,
-    analyze_price_ranges,
     get_state_income_percentile,
     analyze_seasonal_patterns,
     execute_query
 )
+
+# Add state name to code mapping
+STATE_TO_CODE = {
+    'Alabama': 'AL', 'Alaska': 'AK', 'Arizona': 'AZ', 'Arkansas': 'AR', 'California': 'CA',
+    'Colorado': 'CO', 'Connecticut': 'CT', 'Delaware': 'DE', 'Florida': 'FL', 'Georgia': 'GA',
+    'Hawaii': 'HI', 'Idaho': 'ID', 'Illinois': 'IL', 'Indiana': 'IN', 'Iowa': 'IA',
+    'Kansas': 'KS', 'Kentucky': 'KY', 'Louisiana': 'LA', 'Maine': 'ME', 'Maryland': 'MD',
+    'Massachusetts': 'MA', 'Michigan': 'MI', 'Minnesota': 'MN', 'Mississippi': 'MS', 'Missouri': 'MO',
+    'Montana': 'MT', 'Nebraska': 'NE', 'Nevada': 'NV', 'New Hampshire': 'NH', 'New Jersey': 'NJ',
+    'New Mexico': 'NM', 'New York': 'NY', 'North Carolina': 'NC', 'North Dakota': 'ND', 'Ohio': 'OH',
+    'Oklahoma': 'OK', 'Oregon': 'OR', 'Pennsylvania': 'PA', 'Rhode Island': 'RI', 'South Carolina': 'SC',
+    'South Dakota': 'SD', 'Tennessee': 'TN', 'Texas': 'TX', 'Utah': 'UT', 'Vermont': 'VT',
+    'Virginia': 'VA', 'Washington': 'WA', 'West Virginia': 'WV', 'Wisconsin': 'WI', 'Wyoming': 'WY',
+    'District of Columbia': 'DC'
+}
 
 # Set page config
 st.set_page_config(
@@ -42,7 +56,6 @@ analysis_type = st.sidebar.selectbox(
         "Income Growth Analysis",
         "State Income Comparison",
         "Food Price Volatility",
-        "Price Range Analysis",
         "Seasonal Patterns"
     ]
 )
@@ -68,6 +81,16 @@ def get_food_items():
     """
     return execute_query(query)['item_name'].tolist()
 
+# Helper function to get available years for state food sales
+@st.cache_data
+def get_state_food_sales_years():
+    query = """
+    SELECT MIN(year) as min_year, MAX(year) as max_year
+    FROM time_periods tp
+    JOIN state_food_sales sfs ON tp.period_id = sfs.period_id;
+    """
+    return execute_query(query).iloc[0]
+
 # Helper function to get CPI categories
 @st.cache_data
 def get_cpi_categories():
@@ -77,6 +100,17 @@ def get_cpi_categories():
     ORDER BY item_name;
     """
     return execute_query(query)
+
+# Helper function to get regions
+@st.cache_data
+def get_regions():
+    query = """
+    SELECT DISTINCT region_name 
+    FROM regions 
+    WHERE region_type IN ('division', 'region')
+    ORDER BY region_name;
+    """
+    return execute_query(query)['region_name'].tolist()
 
 # Main content based on selection
 if analysis_type == "Income Inequality Analysis":
@@ -118,12 +152,45 @@ elif analysis_type == "Food Price Trends":
 elif analysis_type == "State Food Sales Rankings":
     st.header("State Food Sales Rankings")
     
-    df = get_state_food_sales_rankings()
+    # Get year range from database
+    year_range = get_state_food_sales_years()
+    selected_year = st.slider("Select Year", 
+                            min_value=int(year_range['min_year']), 
+                            max_value=int(year_range['max_year']), 
+                            value=int(year_range['max_year']))
     
+    df = get_state_food_sales_rankings(selected_year)
+    
+    # Add state codes to the dataframe
+    df['state_code'] = df['state'].map(STATE_TO_CODE)
+    
+    # Create choropleth map
+    fig_map = go.Figure(data=go.Choropleth(
+        locations=df['state_code'],  # Using state codes (e.g., 'CA', 'NY')
+        z=df['total_sales_million'],  # Data to be color-coded
+        locationmode='USA-states',  # Set of locations match entries in `locations`
+        colorscale='Cividis',
+        colorbar_title="Sales (Million $)"
+    ))
+
+    fig_map.update_layout(
+        title=f'State Food Sales Heat Map ({selected_year})',
+        geo_scope='usa',  # Limit map scope to USA
+        paper_bgcolor='rgba(0,0,0,0)',  # Transparent background
+        geo=dict(
+            bgcolor='rgba(0,0,0,0)',    # Transparent geo background
+            lakecolor='rgba(0,0,0,0)',  # Transparent lakes
+            landcolor='rgba(0,0,0,0)',  # Transparent land
+            subunitcolor='gray'         # State boundaries color
+        )
+    )
+    st.plotly_chart(fig_map, use_container_width=True, transparent=True)
+    
+    # Original bar chart
     fig = px.bar(df,
                  x='state',
                  y='total_sales_million',
-                 title='State Food Sales Rankings (2023)',
+                 title=f'State Food Sales Rankings ({selected_year})',
                  labels={'total_sales_million': 'Total Sales (Million $)',
                         'state': 'State'})
     st.plotly_chart(fig, use_container_width=True)
@@ -133,19 +200,32 @@ elif analysis_type == "State Food Sales Rankings":
 elif analysis_type == "CPI Analysis":
     st.header("CPI Analysis by Category and Region")
     
-    states = get_states()
-    selected_state = st.selectbox("Select State", states)
+    col1, col2 = st.columns(2)
+    with col1:
+        filter_type = st.selectbox("Filter by", ["State", "Region"])
+    
+    with col2:
+        if filter_type == "State":
+            locations = get_states()
+        else:
+            locations = get_regions()
+        selected_location = st.selectbox(f"Select {filter_type}", locations)
+    
     selected_year = st.selectbox("Select Year", range(2023, 2019, -1))
     
-    df = analyze_cpi_by_category(selected_state, selected_year)
+    df = analyze_cpi_by_category(selected_location, selected_year)
     
     fig = px.bar(df,
                  x='category',
                  y='cpi_value',
-                 title=f'CPI Values by Category in {selected_state} ({selected_year})',
+                 title=f'CPI Values by Category in {selected_location} ({selected_year})',
                  labels={'cpi_value': 'CPI Value',
-                        'category': 'Category'})
-    fig.update_layout(xaxis_tickangle=-45)
+                        'category': 'Category'},
+                 height=600)  # Increased height
+    fig.update_layout(
+        xaxis_tickangle=-45,
+        margin=dict(b=150)  # Increased bottom margin to prevent label cutoff
+    )
     st.plotly_chart(fig, use_container_width=True)
 
 elif analysis_type == "Income Growth Analysis":
@@ -194,33 +274,11 @@ elif analysis_type == "Food Price Volatility":
                  y='avg_volatility',
                  title='Food Price Volatility',
                  labels={'avg_volatility': 'Average Volatility',
-                        'item_name': 'Food Item'})
-    fig.update_layout(xaxis_tickangle=-45)
-    st.plotly_chart(fig, use_container_width=True)
-
-elif analysis_type == "Price Range Analysis":
-    st.header("Food Price Range Analysis")
-    
-    df = analyze_price_ranges()
-    
-    fig = go.Figure()
-    fig.add_trace(go.Bar(
-        name='Price Range',
-        x=df['item_name'],
-        y=df['price_range'],
-        marker_color='lightblue'
-    ))
-    fig.add_trace(go.Scatter(
-        name='Average Price',
-        x=df['item_name'],
-        y=df['avg_price'],
-        mode='markers',
-        marker=dict(color='red', size=8)
-    ))
+                        'item_name': 'Food Item'},
+                 height=700)  # Increased height
     fig.update_layout(
-        title='Price Ranges and Averages by Food Item',
         xaxis_tickangle=-45,
-        barmode='overlay'
+        margin=dict(b=150)  # Increased bottom margin to prevent label cutoff
     )
     st.plotly_chart(fig, use_container_width=True)
 

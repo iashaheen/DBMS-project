@@ -67,9 +67,9 @@ def analyze_food_price_trends(item_name: str):
     return execute_query(query, (f"%{item_name}%",))
 
 # 3. Static Query: State Food Sales Rankings
-def get_state_food_sales_rankings():
+def get_state_food_sales_rankings(year: int = 2023):
     """
-    Ranks states by their total food sales for the most recent year
+    Ranks states by their total food sales for the specified year
     """
     query = """
     SELECT 
@@ -79,16 +79,17 @@ def get_state_food_sales_rankings():
     FROM state_food_sales sfs
     JOIN regions r ON sfs.region_id = r.region_id
     JOIN time_periods tp ON sfs.period_id = tp.period_id
-    WHERE tp.year = 2023
+    WHERE tp.year = %s
     AND r.region_type = 'state'
     ORDER BY sfs.total_sales_million DESC;
     """
-    return execute_query(query)
+    return execute_query(query, (year,))
 
 # 4. Interactive Query: CPI Analysis by Category and Region
 def analyze_cpi_by_category(region_name: str, year: int):
     """
     Analyzes CPI values for different categories in a specific region and year
+    Handles both state and region level filtering
     """
     query = """
     SELECT 
@@ -101,6 +102,7 @@ def analyze_cpi_by_category(region_name: str, year: int):
     JOIN time_periods tp ON cv.period_id = tp.period_id
     JOIN cpi_categories cc ON cv.item_code = cc.item_code
     WHERE r.region_name = %s
+    AND r.region_type IN ('state', 'region', 'division')
     AND tp.year = %s
     ORDER BY cv.value DESC;
     """
