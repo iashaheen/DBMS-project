@@ -1,26 +1,36 @@
-import mysql.connector
 import pandas as pd
-import matplotlib.pyplot as plt
-import seaborn as sns
 from typing import Optional
 import calendar
+import logging
+from sqlalchemy import create_engine
+from sqlalchemy.engine import Engine
 
-def connect_to_db():
-    """Establish database connection"""
-    return mysql.connector.connect(
-        host="localhost",
-        user="root",  # Update with your MySQL username
-        password="",   # Update with your MySQL password
-        database="economic_data"
-    )
+logger = logging.getLogger(__name__)
+
+def get_db_engine() -> Engine:
+    """Create and return SQLAlchemy engine"""
+    try:
+        connection_string = "mysql+pymysql://root:@localhost/economic_data"
+        engine = create_engine(connection_string)
+        return engine
+    except Exception as err:
+        logger.error(f"Database connection error: {err}")
+        raise
 
 def execute_query(query: str, params: tuple = None) -> pd.DataFrame:
     """Execute a query and return results as a DataFrame"""
-    conn = connect_to_db()
     try:
-        return pd.read_sql_query(query, conn, params=params)
-    finally:
-        conn.close()
+        engine = get_db_engine()
+        if params:
+            # Log the query and parameters for debugging
+            logger.debug(f"Executing query with params: {query}, {params}")
+            return pd.read_sql_query(query, engine, params=params)
+        else:
+            logger.debug(f"Executing query: {query}")
+            return pd.read_sql_query(query, engine)
+    except Exception as e:
+        logger.error(f"Query execution error: {e}")
+        raise
 
 # 1. Static Query: Regional Income Inequality Analysis
 def analyze_income_inequality():
@@ -60,10 +70,17 @@ def analyze_food_price_trends(item_name: str):
     JOIN regions r ON fp.region_id = r.region_id
     JOIN time_periods tp ON fp.period_id = tp.period_id
     JOIN food_categories fc ON fp.item_code = fc.item_code
-    WHERE fc.item_name LIKE %s
+    WHERE fc.item_name = %s
     ORDER BY tp.year, tp.month;
     """
-    return execute_query(query, (f"%{item_name}%",))
+    try:
+        logger.debug(f"Analyzing food price trends for: {item_name}")
+        df = execute_query(query, (item_name,))
+        logger.debug(f"Retrieved {len(df)} records for {item_name}")
+        return df
+    except Exception as e:
+        logger.error(f"Error in analyze_food_price_trends: {e}")
+        raise
 
 # 3. Static Query: State Food Sales Rankings
 def get_state_food_sales_rankings():
@@ -354,31 +371,3 @@ def analyze_seasonal_patterns():
     ORDER BY fc.item_name, tp.month;
     """
     return execute_query(query)
-
-# Example usage of visualization for some queries
-def plot_income_inequality(df: pd.DataFrame):
-    plt.figure(figsize=(12, 6))
-    for region in df['region_name'].unique():
-        region_data = df[df['region_name'] == region]
-        plt.plot(region_data['year'], region_data['income_gap'], label=region, marker='o')
-    plt.title('Income Inequality Gap by Region Over Time')
-    plt.xlabel('Year')
-    plt.ylabel('Income Gap (Mean - Median) in 2023 Dollars')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-
-def plot_food_price_trends(df: pd.DataFrame):
-    plt.figure(figsize=(12, 6))
-    for region in df['region_name'].unique():
-        region_data = df[df['region_name'] == region]
-        plt.plot(pd.to_datetime(region_data['year'].astype(str) + '-' + region_data['month'].astype(str) + '-01'),
-                region_data['price'], label=region)
-    plt.title(f'Price Trends for {df["item_name"].iloc[0]}')
-    plt.xlabel('Date')
-    plt.ylabel('Price')
-    plt.legend()
-    plt.grid(True)
-    plt.show()
-
-# Add more visualization functions as needed
