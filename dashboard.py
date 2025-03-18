@@ -49,9 +49,13 @@ st.set_page_config(
 st.title("Economic Analysis Dashboard")
 
 # Sidebar for navigation
+st.sidebar.title("Analysis Categories")
+
+# Update navigation to include SQL Query as a regular option
 analysis_type = st.sidebar.selectbox(
     "Select Analysis Type",
     [
+        "SQL Query",  # Added SQL Query as first option
         "Income Inequality Analysis",
         "Food Price Trends",
         "State Food Sales Rankings",
@@ -61,7 +65,7 @@ analysis_type = st.sidebar.selectbox(
         "Food Price Volatility",
         "Seasonal Patterns",
         "Price vs CPI Comparison",
-        "State Sales vs Income Analysis"  # Added new option
+        "State Sales vs Income Analysis"
     ]
 )
 
@@ -118,7 +122,147 @@ def get_regions():
     return execute_query(query)['region_name'].tolist()
 
 # Main content based on selection
-if analysis_type == "Income Inequality Analysis":
+if analysis_type == "SQL Query":
+    st.header("Custom SQL Query")
+    
+    # Display schema information in an expandable section
+    with st.expander("View Database Schema"):
+        st.markdown("""
+        ### Database Schema
+        
+        #### Regions Table
+        ```sql
+        CREATE TABLE regions (
+            region_id INT AUTO_INCREMENT PRIMARY KEY,
+            region_name VARCHAR(100) NOT NULL UNIQUE,
+            region_type ENUM('state', 'division', 'region') NOT NULL
+        );
+        ```
+        
+        #### Time Periods Table
+        ```sql
+        CREATE TABLE time_periods (
+            period_id INT AUTO_INCREMENT PRIMARY KEY,
+            year INT NOT NULL,
+            month TINYINT,  -- NULL for yearly data
+            period_type ENUM('monthly', 'yearly') NOT NULL
+        );
+        ```
+        
+        #### Food Categories & Prices
+        ```sql
+        CREATE TABLE food_categories (
+            item_code VARCHAR(20) PRIMARY KEY,
+            item_name VARCHAR(255) NOT NULL
+        );
+        
+        CREATE TABLE food_prices (
+            region_id INT,
+            item_code VARCHAR(20),
+            period_id INT,
+            price DECIMAL(10,2),
+            PRIMARY KEY (region_id, item_code, period_id)
+        );
+        ```
+        
+        #### CPI Data
+        ```sql
+        CREATE TABLE cpi_categories (
+            item_code VARCHAR(20) PRIMARY KEY,
+            item_name VARCHAR(255) NOT NULL
+        );
+        
+        CREATE TABLE cpi_values (
+            region_id INT,
+            item_code VARCHAR(20),
+            period_id INT,
+            value DECIMAL(10,2),
+            base_period VARCHAR(50),
+            base_value DECIMAL(10,2)
+        );
+        ```
+        
+        #### Sales & Income Data
+        ```sql
+        CREATE TABLE state_food_sales (
+            region_id INT,
+            period_id INT,
+            total_sales_million DECIMAL(12,2)
+        );
+        
+        CREATE TABLE regional_income (
+            region_id INT,
+            period_id INT,
+            households_thousands INT,
+            median_income_current DECIMAL(12,2),
+            median_income_2023 DECIMAL(12,2),
+            mean_income_current DECIMAL(12,2),
+            mean_income_2023 DECIMAL(12,2)
+        );
+        
+        CREATE TABLE state_income (
+            region_id INT,
+            period_id INT,
+            median_income_current DECIMAL(12,2),
+            median_income_2023 DECIMAL(12,2),
+            standard_error_current DECIMAL(10,2),
+            standard_error_2023 DECIMAL(10,2)
+        );
+        """)
+    
+    # Example queries in an expandable section
+    with st.expander("View Example Queries"):
+        st.markdown("""
+        ### Example Queries
+        
+        1. Get average food prices by region in 2023:
+        ```sql
+        SELECT r.region_name, fc.item_name, AVG(fp.price) as avg_price
+        FROM food_prices fp
+        JOIN regions r ON fp.region_id = r.region_id
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        WHERE tp.year = 2023
+        GROUP BY r.region_name, fc.item_name
+        ORDER BY r.region_name, fc.item_name;
+        ```
+        
+        2. Compare median income across states in 2023:
+        ```sql
+        SELECT r.region_name, si.median_income_2023
+        FROM state_income si
+        JOIN regions r ON si.region_id = r.region_id
+        JOIN time_periods tp ON si.period_id = tp.period_id
+        WHERE tp.year = 2023
+        ORDER BY si.median_income_2023 DESC;
+        ```
+        """)
+    
+    # Query input
+    query = st.text_area("Enter your SQL query:", height=200)
+    
+    # Execute query button
+    if st.button("Execute Query"):
+        if query:
+            try:
+                result = execute_query(query)
+                st.write("Query Results:")
+                st.dataframe(result)
+                
+                # Download button for results
+                csv = result.to_csv(index=False)
+                st.download_button(
+                    label="Download Results as CSV",
+                    data=csv,
+                    file_name="query_results.csv",
+                    mime="text/csv"
+                )
+            except Exception as e:
+                st.error(f"Error executing query: {str(e)}")
+        else:
+            st.warning("Please enter a query to execute.")
+
+elif analysis_type == "Income Inequality Analysis":
     st.header("Regional Income Inequality Analysis")
     
     df = analyze_income_inequality()
