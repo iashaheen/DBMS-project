@@ -17,7 +17,9 @@ DROP TABLE IF EXISTS regions;
 CREATE TABLE regions (
     region_id INT AUTO_INCREMENT PRIMARY KEY,
     region_name VARCHAR(100) NOT NULL UNIQUE,
-    region_type ENUM('state', 'division', 'region') NOT NULL
+    region_type ENUM('state', 'division', 'region') NOT NULL,
+    region_code VARCHAR(2),  -- Two-letter state code for states
+    UNIQUE KEY state_code_unique (region_code)
 );
 
 -- Time Period Reference

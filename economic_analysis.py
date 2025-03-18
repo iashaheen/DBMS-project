@@ -4,6 +4,7 @@ import calendar
 import logging
 from sqlalchemy import create_engine
 from sqlalchemy.engine import Engine
+import matplotlib.pyplot as plt
 
 logger = logging.getLogger(__name__)
 
@@ -60,23 +61,61 @@ def analyze_food_price_trends(item_name: str):
     Analyzes price trends for a specific food item across all regions over time
     """
     query = """
+    WITH price_validation AS (
+        SELECT 
+            r.region_name,
+            tp.year,
+            tp.month,
+            fp.price,
+            fc.item_name,
+            AVG(fp.price) OVER (
+                PARTITION BY r.region_name 
+                ORDER BY tp.year, tp.month
+                ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING
+            ) as rolling_avg,
+            ABS(fp.price - AVG(fp.price) OVER (
+                PARTITION BY r.region_name 
+                ORDER BY tp.year, tp.month
+                ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING
+            )) / NULLIF(AVG(fp.price) OVER (
+                PARTITION BY r.region_name 
+                ORDER BY tp.year, tp.month
+                ROWS BETWEEN 2 PRECEDING AND 2 FOLLOWING
+            ), 0) as price_deviation
+        FROM food_prices fp
+        JOIN regions r ON fp.region_id = r.region_id
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        WHERE fc.item_name = %s
+        AND tp.period_type = 'monthly'
+    )
     SELECT 
-        r.region_name,
-        tp.year,
-        tp.month,
-        fp.price,
-        fc.item_name
-    FROM food_prices fp
-    JOIN regions r ON fp.region_id = r.region_id
-    JOIN time_periods tp ON fp.period_id = tp.period_id
-    JOIN food_categories fc ON fp.item_code = fc.item_code
-    WHERE fc.item_name = %s
-    ORDER BY tp.year, tp.month;
+        region_name,
+        year,
+        month,
+        CASE 
+            WHEN price_deviation > 0.5 THEN rolling_avg  -- Replace outliers with rolling average
+            ELSE price
+        END as price,
+        item_name,
+        price as original_price,
+        rolling_avg,
+        price_deviation
+    FROM price_validation
+    ORDER BY year, month;
     """
     try:
         logger.debug(f"Analyzing food price trends for: {item_name}")
         df = execute_query(query, (item_name,))
         logger.debug(f"Retrieved {len(df)} records for {item_name}")
+        
+        # Log data quality metrics
+        if not df.empty:
+            outliers = df[df['price'] != df['original_price']].shape[0]
+            logger.info(f"Found and corrected {outliers} price outliers for {item_name}")
+            coverage = df.groupby('region_name').size().describe()
+            logger.info(f"Data coverage statistics:\n{coverage}")
+        
         return df
     except Exception as e:
         logger.error(f"Error in analyze_food_price_trends: {e}")
@@ -356,18 +395,312 @@ def get_state_income_percentile(state_name: str):
 # 15. Static Query: Seasonal Price Patterns
 def analyze_seasonal_patterns():
     """
-    Analyzes seasonal patterns in food prices
+    Analyzes seasonal patterns in food prices with improved aggregation and seasonality metrics
     """
     query = """
+    WITH monthly_avg AS (
+        SELECT 
+            fc.item_name,
+            tp.month,
+            AVG(fp.price) as avg_price,
+            MIN(fp.price) as min_price,
+            MAX(fp.price) as max_price,
+            COUNT(DISTINCT r.region_id) as num_regions,
+            STDDEV(fp.price) as price_std
+        FROM food_prices fp
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        JOIN regions r ON fp.region_id = r.region_id
+        WHERE tp.month IS NOT NULL
+        AND tp.period_type = 'monthly'
+        GROUP BY fc.item_name, tp.month
+    ),
+    yearly_stats AS (
+        SELECT 
+            item_name,
+            AVG(avg_price) as yearly_avg,
+            STDDEV(avg_price) as yearly_std
+        FROM monthly_avg
+        GROUP BY item_name
+    )
+    SELECT 
+        ma.item_name,
+        ma.month,
+        ma.avg_price,
+        ma.min_price,
+        ma.max_price,
+        ma.num_regions,
+        ma.price_std,
+        ys.yearly_avg,
+        ((ma.avg_price - ys.yearly_avg) / ys.yearly_avg * 100) as seasonal_index,
+        (ma.price_std / ma.avg_price * 100) as monthly_cv
+    FROM monthly_avg ma
+    JOIN yearly_stats ys ON ma.item_name = ys.item_name
+    ORDER BY ma.item_name, ma.month;
+    """
+    return execute_query(query)
+
+# 16. Geographic Price Distribution
+def analyze_geographic_price_distribution(item_name: str, year: int, month: Optional[int] = None):
+    """
+    Analyzes price distribution across states for geographical visualization
+    """
+    query = """
+    WITH latest_prices AS (
+        SELECT 
+            r.region_name,
+            UPPER(SUBSTRING(r.region_name, 1, 2)) as state_code,
+            r.region_type,
+            fc.item_name,
+            fp.price,
+            tp.year,
+            tp.month,
+            AVG(fp.price) OVER (PARTITION BY r.region_type) as avg_price,
+            (fp.price - AVG(fp.price) OVER (PARTITION BY r.region_type)) / 
+            NULLIF(AVG(fp.price) OVER (PARTITION BY r.region_type), 0) * 100 as price_diff_pct
+        FROM food_prices fp
+        JOIN regions r ON fp.region_id = r.region_id
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        WHERE r.region_type = 'state'
+        AND fc.item_name = %s
+        AND tp.year = %s
+        AND tp.period_type = 'monthly'
+        {}
+    )
+    SELECT 
+        region_name,
+        state_code,
+        item_name,
+        price,
+        year,
+        month,
+        avg_price as national_avg,
+        COALESCE(price_diff_pct, 0) as price_diff_pct
+    FROM latest_prices
+    WHERE price IS NOT NULL
+    ORDER BY price DESC;
+    """
+    
+    if month:
+        month_condition = "AND tp.month = %s"
+        query = query.format(month_condition)
+        return execute_query(query, (item_name, year, month))
+    else:
+        query = query.format("")
+        return execute_query(query, (item_name, year))
+
+# 17. Regional Price Disparities
+def analyze_regional_price_disparities():
+    """
+    Analyzes price differences between regions for common food items
+    """
+    query = """
+    WITH avg_prices AS (
+        SELECT 
+            r.region_name,
+            fc.item_name,
+            AVG(fp.price) as avg_price
+        FROM food_prices fp
+        JOIN regions r ON fp.region_id = r.region_id
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        WHERE tp.year = (SELECT MAX(year) FROM time_periods)
+        AND r.region_type = 'region'
+        GROUP BY r.region_name, fc.item_name
+    ),
+    price_stats AS (
+        SELECT 
+            item_name,
+            MAX(avg_price) - MIN(avg_price) as price_gap,
+            AVG(avg_price) as national_avg,
+            STDDEV(avg_price) as price_std
+        FROM avg_prices
+        GROUP BY item_name
+    )
+    SELECT 
+        item_name,
+        price_gap,
+        national_avg,
+        price_std,
+        (price_std / national_avg) as coefficient_of_variation
+    FROM price_stats
+    ORDER BY coefficient_of_variation DESC
+    LIMIT 15;
+    """
+    return execute_query(query)
+
+# 18. Income-Adjusted Food Prices
+def analyze_income_adjusted_prices(item_name: str):
+    """
+    Analyzes food prices adjusted by median income across states
+    """
+    query = """
+    WITH latest_data AS (
+        SELECT 
+            r.region_name,
+            fc.item_name,
+            fp.price,
+            si.median_income_2023,
+            (fp.price / si.median_income_2023 * 50000) as adjusted_price
+        FROM food_prices fp
+        JOIN regions r ON fp.region_id = r.region_id
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        JOIN state_income si ON r.region_id = si.region_id 
+            AND tp.period_id = si.period_id
+        WHERE fc.item_name = %s
+        AND tp.year = (SELECT MAX(year) FROM time_periods)
+        AND r.region_type = 'state'
+    )
+    SELECT 
+        region_name,
+        price as nominal_price,
+        median_income_2023,
+        adjusted_price,
+        (adjusted_price - price) as price_difference
+    FROM latest_data
+    ORDER BY adjusted_price DESC;
+    """
+    return execute_query(query, (item_name,))
+
+# 19. Price Trend Correlation
+def analyze_price_trend_correlation():
+    """
+    Analyzes correlation between different food items' price trends
+    """
+    query = """
+    WITH monthly_prices AS (
+        SELECT 
+            fc.item_name,
+            tp.year,
+            tp.month,
+            AVG(fp.price) as avg_price
+        FROM food_prices fp
+        JOIN food_categories fc ON fp.item_code = fc.item_code
+        JOIN time_periods tp ON fp.period_id = tp.period_id
+        GROUP BY fc.item_name, tp.year, tp.month
+    ),
+    price_changes AS (
+        SELECT 
+            a.item_name,
+            a.year,
+            a.month,
+            ((a.avg_price - b.avg_price) / b.avg_price) as price_change
+        FROM monthly_prices a
+        JOIN monthly_prices b ON a.item_name = b.item_name
+            AND ((a.year = b.year AND a.month = b.month + 1)
+                OR (a.year = b.year + 1 AND a.month = 1 AND b.month = 12))
+    )
+    SELECT 
+        p1.item_name as item1,
+        p2.item_name as item2,
+        CORR(p1.price_change, p2.price_change) as correlation
+    FROM price_changes p1
+    JOIN price_changes p2 ON p1.year = p2.year 
+        AND p1.month = p2.month
+        AND p1.item_name < p2.item_name
+    GROUP BY p1.item_name, p2.item_name
+    HAVING ABS(correlation) > 0.7
+    ORDER BY ABS(correlation) DESC;
+    """
+    return execute_query(query)
+
+# 20. Urban-Rural Price Comparison
+def analyze_urban_rural_prices():
+    """
+    Compares food prices between urban and rural areas
+    """
+    query = """
+    WITH state_urbanization AS (
+        SELECT 
+            r.region_id,
+            r.region_name,
+            CASE 
+                WHEN sfs.total_sales_million > (
+                    SELECT AVG(total_sales_million) 
+                    FROM state_food_sales sfs2
+                    JOIN time_periods tp2 ON sfs2.period_id = tp2.period_id
+                    WHERE tp2.year = (SELECT MAX(year) FROM time_periods)
+                ) THEN 'Urban'
+                ELSE 'Rural'
+            END as area_type
+        FROM regions r
+        JOIN state_food_sales sfs ON r.region_id = sfs.region_id
+        JOIN time_periods tp ON sfs.period_id = tp.period_id
+        WHERE r.region_type = 'state'
+        AND tp.year = (SELECT MAX(year) FROM time_periods)
+    )
     SELECT 
         fc.item_name,
-        tp.month,
-        AVG(fp.price) as avg_price
+        su.area_type,
+        COUNT(DISTINCT su.region_id) as num_states,
+        AVG(fp.price) as avg_price,
+        MIN(fp.price) as min_price,
+        MAX(fp.price) as max_price,
+        STDDEV(fp.price) as price_std
     FROM food_prices fp
     JOIN food_categories fc ON fp.item_code = fc.item_code
     JOIN time_periods tp ON fp.period_id = tp.period_id
-    WHERE tp.month IS NOT NULL
-    GROUP BY fc.item_name, tp.month
-    ORDER BY fc.item_name, tp.month;
+    JOIN state_urbanization su ON fp.region_id = su.region_id
+    WHERE tp.year = (SELECT MAX(year) FROM time_periods)
+    AND tp.period_type = 'monthly'
+    AND tp.month = (
+        SELECT MAX(month) 
+        FROM time_periods 
+        WHERE year = (SELECT MAX(year) FROM time_periods)
+    )
+    GROUP BY fc.item_name, su.area_type
+    ORDER BY fc.item_name, su.area_type;
     """
     return execute_query(query)
+
+def get_state_food_sales_timeseries():
+    """
+    Gets food sales data for all states over time for visualization
+    """
+    query = """
+    SELECT 
+        r.region_name,
+        UPPER(SUBSTRING(r.region_name, 1, 2)) as state_code,
+        tp.year,
+        sfs.total_sales_million
+    FROM state_food_sales sfs
+    JOIN regions r ON sfs.region_id = r.region_id
+    JOIN time_periods tp ON sfs.period_id = tp.period_id
+    WHERE r.region_type = 'state'
+    ORDER BY tp.year, r.region_name;
+    """
+    return execute_query(query)
+
+# Example visualization functions for plotting
+def plot_income_inequality(df: pd.DataFrame):
+    """Plot income inequality trends"""
+    plt.figure(figsize=(12, 6))
+    for region in df['region_name'].unique():
+        region_data = df[df['region_name'] == region]
+        plt.plot(region_data['year'], region_data['income_gap'], label=region, marker='o')
+    plt.title('Income Inequality Gap by Region Over Time')
+    plt.xlabel('Year')
+    plt.ylabel('Income Gap (Mean - Median) in 2023 Dollars')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
+
+def plot_food_price_trends(df: pd.DataFrame):
+    """Plot food price trends over time"""
+    plt.figure(figsize=(12, 6))
+    for region in df['region_name'].unique():
+        region_data = df[df['region_name'] == region]
+        plt.plot(
+            pd.to_datetime(region_data['year'].astype(str) + '-' + 
+                         region_data['month'].astype(str) + '-01'),
+            region_data['price'],
+            label=region
+        )
+    plt.title(f'Price Trends for {df["item_name"].iloc[0]}')
+    plt.xlabel('Date')
+    plt.ylabel('Price')
+    plt.legend()
+    plt.grid(True)
+    plt.show()
