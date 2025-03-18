@@ -432,6 +432,26 @@ def analyze_avg_food_price_vs_cpi(cpi_category: str):
     """
     return execute_query(query, (cpi_category,))
 
+def analyze_state_sales_vs_income(state: str):
+    """
+    Compares state food sales with median income over time for a specific state
+    """
+    query = """
+    SELECT 
+        tp.year,
+        sfs.total_sales_million,
+        si.median_income_2023
+    FROM state_food_sales sfs
+    JOIN state_income si ON sfs.region_id = si.region_id 
+        AND sfs.period_id = si.period_id
+    JOIN regions r ON sfs.region_id = r.region_id
+    JOIN time_periods tp ON sfs.period_id = tp.period_id
+    WHERE r.region_name = %s
+    AND r.region_type = 'state'
+    ORDER BY tp.year;
+    """
+    return execute_query(query, (state,))
+
 # Example usage of visualization for some queries
 def plot_income_inequality(df: pd.DataFrame):
     plt.figure(figsize=(12, 6))

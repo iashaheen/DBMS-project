@@ -19,7 +19,8 @@ from economic_analysis import (
     analyze_seasonal_patterns,
     execute_query,
     analyze_price_vs_cpi,
-    analyze_avg_food_price_vs_cpi
+    analyze_avg_food_price_vs_cpi,
+    analyze_state_sales_vs_income
 )
 
 # Add state name to code mapping
@@ -59,7 +60,8 @@ analysis_type = st.sidebar.selectbox(
         "State Income Comparison",
         "Food Price Volatility",
         "Seasonal Patterns",
-        "Price vs CPI Comparison"  # Added new option
+        "Price vs CPI Comparison",
+        "State Sales vs Income Analysis"  # Added new option
     ]
 )
 
@@ -397,6 +399,60 @@ elif analysis_type == "Price vs CPI Comparison":
     )
     
     st.plotly_chart(fig2, use_container_width=True)
+
+elif analysis_type == "State Sales vs Income Analysis":
+    st.header("State Food Sales vs Income Analysis")
+    
+    # Get input
+    states = get_states()
+    selected_state = st.selectbox("Select State", states)
+    
+    # Get data
+    df = analyze_state_sales_vs_income(selected_state)
+    
+    # Create figure with secondary y-axis
+    fig = go.Figure()
+    
+    # Add food sales line
+    fig.add_trace(go.Scatter(
+        x=df['year'],
+        y=df['total_sales_million'],
+        name='Food Sales',
+        line=dict(color='blue')
+    ))
+    
+    # Add income line on secondary y-axis
+    fig.add_trace(go.Scatter(
+        x=df['year'],
+        y=df['median_income_2023'],
+        name='Median Income',
+        yaxis='y2',
+        line=dict(color='green')
+    ))
+    
+    fig.update_layout(
+        title=f'Food Sales vs Median Income in {selected_state}',
+        yaxis=dict(title='Total Sales (Million $)', side='left', showgrid=False),
+        yaxis2=dict(title='Median Income (2023 $)', side='right', overlaying='y', showgrid=False),
+        hovermode='x unified',
+        xaxis=dict(title='Year'),
+        legend=dict(
+            orientation="h",
+            yanchor="bottom",
+            y=-0.2,
+            xanchor="center",
+            x=0.5
+        )
+    )
+    
+    st.plotly_chart(fig, use_container_width=True)
+    
+    # Show correlation coefficient
+    correlation = df['total_sales_million'].corr(df['median_income_2023'])
+    st.write(f"Correlation coefficient between food sales and median income: {correlation:.3f}")
+    
+    # Show the data table
+    st.dataframe(df)
 
 # Add a footer with data source information
 st.sidebar.markdown("---")
