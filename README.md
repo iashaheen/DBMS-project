@@ -117,6 +117,3 @@ The project uses data from multiple sources, stored in the `data/` directory:
 4. Push to the branch
 5. Create a new Pull Request
 
-## License
-
-[Add your license information here]
